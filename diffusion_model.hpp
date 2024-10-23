@@ -24,6 +24,8 @@ struct DiffusionModel {
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
     virtual size_t get_params_buffer_size()                                             = 0;
     virtual int64_t get_adm_in_channels()                                               = 0;
+    virtual void transform(int n)                                                       = 0;
+
 };
 
 struct UNetModel : public DiffusionModel {
@@ -31,12 +33,17 @@ struct UNetModel : public DiffusionModel {
 
     UNetModel(ggml_backend_t backend,
               ggml_type wtype,
-              SDVersion version = VERSION_SD1)
-        : unet(backend, wtype, version) {
+              SDVersion version = VERSION_SD1,
+              bool flash_attn = false)
+        : unet(backend, wtype, version, flash_attn) {
     }
 
     void alloc_params_buffer() {
         unet.alloc_params_buffer();
+    }
+
+    void transform(int n){
+        unet.transform(n);
     }
 
     void free_params_buffer() {
@@ -108,6 +115,10 @@ struct MMDiTModel : public DiffusionModel {
         return 768 + 1280;
     }
 
+    void transform(int n){
+     
+    }
+
     void compute(int n_threads,
                  struct ggml_tensor* x,
                  struct ggml_tensor* timesteps,
@@ -129,8 +140,9 @@ struct FluxModel : public DiffusionModel {
 
     FluxModel(ggml_backend_t backend,
               ggml_type wtype,
-              SDVersion version = VERSION_FLUX_DEV)
-        : flux(backend, wtype, version) {
+              SDVersion version = VERSION_FLUX_DEV,
+              bool flash_attn = false)
+        : flux(backend, wtype, version, flash_attn) {
     }
 
     void alloc_params_buffer() {
@@ -155,6 +167,10 @@ struct FluxModel : public DiffusionModel {
 
     int64_t get_adm_in_channels() {
         return 768;
+    }
+
+    void transform(int n){
+     
     }
 
     void compute(int n_threads,

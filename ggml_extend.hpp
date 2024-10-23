@@ -591,7 +591,47 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
                                                       int p1 = 0,
                                                       int d0 = 1,
                                                       int d1 = 1) {
+    // if(w->ne[0]==3 && w->ne[1]==3 && p0==1 && p1==1 && s0==1 && s1==1 && 
+    //       d0==1 && d1==1 && w->ne[3]%64 == 0 && w->ne[2]%8 == 0 && x->ne[3] == 1){
+       
+        // printf("x-shape 0: (%zu, %zu, %zu, %zu) %zu, %zu \n", x->ne[0], x->ne[1], x->ne[2], x->ne[3], w->ne[2], w->ne[3]); 
+        // printf(" (%zu, %zu, %zu, %zu) %zu, %zu \n", x->ne[0], x->ne[1], x->ne[2], x->ne[3], w->ne[2], w->ne[3]);
+        // print_ggml_tensor(x, false, "bef wino");
+        // x = ggml_conv_2d_3x3(ctx, w, x);         
+        // print_ggml_tensor(x, false, "aft wino");                                 
+        // printf("x-shape 2: (%zu, %zu, %zu, %zu) %zu, %zu \n", x->ne[0], x->ne[1], x->ne[2], x->ne[3], w->ne[2], w->ne[3]); 
+    // }          
+    // else{    
     x = ggml_conv_2d(ctx, w, x, s0, s1, p0, p1, d0, d1);
+        // if(w->ne[0]==3 && w->ne[1]==3 && p0==1 && p1==1 && s0==1 && s1==1 && 
+        //   d0==1 && d1==1 && w->ne[3]%64 == 0 && w->ne[2]%8 == 0 && x->ne[3] == 1){
+        //     printf("x-shape1: (%zu, %zu, %zu, %zu) %zu, %zu \n", x->ne[0], x->ne[1], x->ne[2], x->ne[3], w->ne[2], w->ne[3]);
+        // }
+    // }
+    if (b != NULL) {
+        b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
+        // b = ggml_repeat(ctx, b, x);
+        x = ggml_add(ctx, x, b);
+    }
+    return x;
+}
+
+// w: [IC, 4, 4, OC]
+// x: [1, IC, IH, IW]
+// b: [OC,]
+// result: [N, OC, OH, OW]
+__STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d1x3x3(struct ggml_context* ctx,
+                                                      struct ggml_tensor* x,
+                                                      struct ggml_tensor* w,
+                                                      struct ggml_tensor* b
+                                                      ) {
+    // int64_t *ne = x->ne;
+    // if(!w) printf("w is null\n");
+    // int64_t *ne1 = w->ne;
+    // printf("before: (%ld, %ld, %ld, %ld), (%ld, %ld, %ld, %ld)\n",  ne[0], ne[1], ne[2], ne[3], ne1[0], ne1[1], ne1[2], ne1[3]);
+    x = ggml_winograd_stage1(ctx, w, x);    
+    // ne = x->ne;
+    // printf("after: (%ld, %ld, %ld, %ld)\n",  ne[0], ne[1], ne[2], ne[3]);
     if (b != NULL) {
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
         // b = ggml_repeat(ctx, b, x);
@@ -667,32 +707,6 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> split_qkv(struct ggml_context
     return {q, k, v};
 }
 
-// q: [N * n_head, n_token, d_head]
-// k: [N * n_head, n_k, d_head]
-// v: [N * n_head, d_head, n_k]
-// return: [N * n_head, n_token, d_head]
-__STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx,
-                                                        struct ggml_tensor* q,
-                                                        struct ggml_tensor* k,
-                                                        struct ggml_tensor* v,
-                                                        bool mask = false) {
-#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL) && !defined(SD_USE_VULKAN) && !defined(SD_USE_SYCL)
-    struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
-#else
-    float d_head = (float)q->ne[0];
-
-    struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, n_token, n_k]
-    kq                     = ggml_scale_inplace(ctx, kq, 1.0f / sqrt(d_head));
-    if (mask) {
-        kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
-    }
-    kq = ggml_soft_max_inplace(ctx, kq);
-
-    struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, n_token, d_head]
-#endif
-    return kqv;
-}
-
 // q: [N, L_q, C] or [N*n_head, L_q, d_head]
 // k: [N, L_k, C] or [N*n_head, L_k, d_head]
 // v: [N, L_k, C] or [N, L_k, n_head, d_head]
@@ -704,7 +718,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
                                                             int64_t n_head,
                                                             struct ggml_tensor* mask = NULL,
                                                             bool diag_mask_inf       = false,
-                                                            bool skip_reshape        = false) {
+                                                            bool skip_reshape        = false,
+                                                            bool flash_attn          = false) {
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -735,13 +750,42 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
 
     float scale = (1.0f / sqrt((float)d_head));
 
-    bool use_flash_attn = false;
-    ggml_tensor* kqv    = NULL;
-    if (use_flash_attn) {
+    //if (flash_attn) {
+    //    LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
+    //}
+    // is there anything oddly shaped?? ping Green-Sky if you can trip this assert
+    GGML_ASSERT(((L_k % 256 == 0) && L_q == L_k) || !(L_k % 256 == 0));
+
+    bool can_use_flash_attn = true;
+    can_use_flash_attn = can_use_flash_attn && L_k % 256 == 0;
+    can_use_flash_attn = can_use_flash_attn && d_head % 64 == 0; // double check
+
+    // cuda max d_head seems to be 256, cpu does seem to work with 512
+    can_use_flash_attn = can_use_flash_attn && d_head <= 256; // double check
+
+    if (mask != nullptr) {
+        // TODO(Green-Sky): figure out if we can bend t5 to work too
+        can_use_flash_attn = can_use_flash_attn && mask->ne[2] == 1;
+        can_use_flash_attn = can_use_flash_attn && mask->ne[3] == 1;
+    }
+
+    // TODO(Green-Sky): more pad or disable for funny tensor shapes
+
+    ggml_tensor* kqv = nullptr;
+    //GGML_ASSERT((flash_attn && can_use_flash_attn) || !flash_attn);
+    if (can_use_flash_attn && flash_attn) {
+        //LOG_DEBUG("using flash attention");
+        k = ggml_cast(ctx, k, GGML_TYPE_F16);
+
         v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
         v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
-        LOG_DEBUG("k->ne[1] == %d", k->ne[1]);
+        v = ggml_cast(ctx, v, GGML_TYPE_F16);
+
         kqv = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0, 0);
+        ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+
+        //kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_k, kqv->nb[1], kqv->nb[2], 0);
+        kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_q, kqv->nb[1], kqv->nb[2], 0);
     } else {
         v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_head, d_head, L_k]
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_head * N);  // [N * n_head, d_head, L_k]
@@ -757,10 +801,12 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         kq = ggml_soft_max_inplace(ctx, kq);
 
         kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, L_q, d_head]
+
+        kqv = ggml_reshape_4d(ctx, kqv, d_head, L_q, n_head, N);   // [N, n_head, L_q, d_head]
+        kqv = ggml_permute(ctx, kqv, 0, 2, 1, 3);  // [N, L_q, n_head, d_head]
     }
 
-    kqv = ggml_reshape_4d(ctx, kqv, d_head, L_q, n_head, N);   // [N, n_head, L_q, d_head]
-    kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, L_q, n_head, d_head]
+    kqv = ggml_cont(ctx, kqv);
     kqv = ggml_reshape_3d(ctx, kqv, d_head * n_head, L_q, N);  // [N, L_q, C]
 
     return kqv;
@@ -995,7 +1041,7 @@ protected:
 
         // compute the required memory
         size_t compute_buffer_size = ggml_gallocr_get_buffer_size(compute_allocr, 0);
-        LOG_DEBUG("%s compute buffer size: %.2f MB(%s)",
+        LOG_INFO("%s compute buffer size: %.2f MB(%s)",
                   get_desc().c_str(),
                   compute_buffer_size / 1024.0 / 1024.0,
                   ggml_backend_is_cpu(backend) ? "RAM" : "VRAM");
@@ -1012,6 +1058,8 @@ protected:
 
         backend_tensor_data_map.clear();
     }
+
+    virtual void transform(int n){};
 
 public:
     virtual std::string get_desc() = 0;
@@ -1149,12 +1197,27 @@ protected:
         }
     }
 
+    void transform_blocks(struct ggml_context* ctx, int n, ggml_backend_t backend) {
+        for (auto& pair : blocks) {
+            auto& block = pair.second;
+
+            block->transform(ctx, n, backend);
+        }
+    }
+
     virtual void init_params(struct ggml_context* ctx, ggml_type wtype) {}
+
+    virtual void transform_params(struct ggml_context* ctx, int n, ggml_backend_t backend){}
 
 public:
     void init(struct ggml_context* ctx, ggml_type wtype) {
         init_blocks(ctx, wtype);
         init_params(ctx, wtype);
+    }
+
+    void transform(struct ggml_context* ctx, int n, ggml_backend_t backend) {
+        transform_blocks(ctx, n, backend);
+        transform_params(ctx, n, backend);
     }
 
     size_t get_params_num() {
@@ -1307,13 +1370,74 @@ public:
           dilation(dilation),
           bias(bias) {}
 
+    // Conv2d(){}      
+
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = NULL;
         if (bias) {
             b = params["bias"];
         }
+        // if(kernel_size.first == 3){
+        //    printf(" (%zu, %zu, %zu, %zu) %zu, %zu \n", x->ne[0], x->ne[1], x->ne[2], x->ne[3], in_channels, out_channels);
+        //     //  printf(" (%d -  %d - %d) \n", stride.first, padding.first, dilation.first);
+        // }
         return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+    }
+};
+
+class Conv2d1x3x3 : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;    
+    bool bias;
+
+    struct ggml_tensor* trans = NULL;
+
+    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+        params["weight"] = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, in_channels, out_channels);
+        // params["transform"] = ggml_winograd_stage0(ctx, params["weight"]); 
+        trans = ggml_winograd_stage0(ctx, params["weight"]);
+        if (bias) {
+            params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+        }
+    }
+
+    void transform_params(struct ggml_context* ctx, int n_threads, ggml_backend_t backend){
+        // struct ggml_tensor* w = params["weight"];
+        // struct ggml_tensor* t = ggml_winograd_stage0(ctx, w);   
+        struct ggml_cgraph  * gf = ggml_new_graph(ctx);
+        ggml_build_forward_expand(gf, trans);
+        if (ggml_backend_is_cpu(backend)) {
+            ggml_backend_cpu_set_n_threads(backend, n_threads);
+        }
+        ggml_backend_graph_compute(backend, gf);
+        params["transform"] = trans;
+        ggml_graph_clear(gf);
+        trans->src[0] = NULL; // not elegant!! skip FX during wino_stage1
+    }
+
+public:
+    Conv2d1x3x3(int64_t in_channels,
+           int64_t out_channels,           
+           bool bias = true)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          bias(bias){}
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        // struct ggml_tensor* w = params["weight"];
+        struct ggml_tensor* w = params["transform"];
+        struct ggml_tensor* b = NULL;
+        if (bias) {
+            b = params["bias"];
+        }
+        // if(kernel_size.first == 3){
+        //    printf(" (%zu, %zu, %zu, %zu) %zu, %zu \n", x->ne[0], x->ne[1], x->ne[2], x->ne[3], in_channels, out_channels);
+        //     //  printf(" (%d -  %d - %d) \n", stride.first, padding.first, dilation.first);
+        // }
+        // return ggml_nn_conv_2d1x3x3(ctx, x, w, b);
+        return ggml_nn_conv_2d1x3x3(ctx, x, trans, b);
     }
 };
 
