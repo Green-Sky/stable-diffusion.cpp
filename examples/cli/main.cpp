@@ -1004,7 +1004,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.clip_l_path.c_str(), params.clip_g_path.c_str(), params.t5xxl_path.c_str(), params.diffusion_model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
+        bool success = convert(params.model_path.c_str(), params.clip_l_path.c_str(), params.clip_g_path.c_str(), params.t5xxl_path.c_str(), params.diffusion_model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype, params.prompt.c_str(), params.lora_model_dir.c_str());
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",
