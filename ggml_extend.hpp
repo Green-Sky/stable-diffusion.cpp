@@ -5,6 +5,7 @@
 #include <inttypes.h>
 #include <stdarg.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -914,14 +915,27 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         v = ggml_cast(ctx, v, GGML_TYPE_F16);
 
         if (mask != nullptr) {
-            mask = ggml_transpose(ctx, mask);
-
-            if (mask->ne[1] < GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD)) {
+            if (mask->ne[0] < GGML_PAD(q->ne[0], GGML_KQ_MASK_PAD)) {
                 LOG_DEBUG("mask dims %ld, %ld, %ld, %ld\n", mask->ne[0], mask->ne[1], mask->ne[2], mask->ne[3]);
-                LOG_DEBUG("needs padding, padding from %ld to %ld\n", mask->ne[1], GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD));
-                mask = ggml_pad(ctx, mask, 0, GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD) - mask->ne[1], 0, 0);
+                LOG_DEBUG("needs padding, padding from %ld to %ld\n", mask->ne[0], GGML_PAD(q->ne[0], GGML_KQ_MASK_PAD));
+
+                //mask = ggml_pad(ctx, mask, GGML_PAD(q->ne[0], GGML_KQ_MASK_PAD) - mask->ne[0], 0, 0, 0);
+
+                auto* new_mask = ggml_new_tensor_4d(ctx, mask->type,
+                    GGML_PAD(q->ne[0], GGML_KQ_MASK_PAD),
+                    mask->ne[1],
+                    mask->ne[2],
+                    mask->ne[3]
+                );
+                //new_mask = ggml_set_f32(new_mask, -INFINITY); // brute force, needs optim
+                new_mask = ggml_scale_bias_inplace(ctx, new_mask, 0.f, -INFINITY);
+
+                //// copy the old mask over
+                //mask = ggml_set_inplace(ctx, new_mask, mask, mask->nb[1], mask->nb[2], mask->nb[3], 0);
+                mask = ggml_set_inplace(ctx, new_mask, mask, mask->nb[0], 0, 0, 0);
             }
 
+            mask = ggml_transpose(ctx, mask);
             mask = ggml_cast(ctx, mask, GGML_TYPE_F16);
         }
 
